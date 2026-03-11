@@ -14,7 +14,7 @@ CORS(app)
 
 # --- CONFIGURATION ---
 MODEL_PATH = 'plant_disease_model.h5'
-USER_DB = '/tmp/users.json' # Use /tmp for better write access on cloud
+USER_DB = '/tmp/users.json' 
 TARGET_SIZE = (128, 128) 
 _model = None
 
@@ -33,50 +33,65 @@ def load_users():
 def save_users(users):
     with open(USER_DB, 'w') as f: json.dump(users, f)
 
-# --- AUTH ROUTES ---
+CLASS_NAMES = [
+    'Apple Scab', 'Apple black rot', 'Apple Cedar Rust', 'Apple healthy',
+    'Blueberry Healthy', 'Cherry Healthy', 'Cherry powdery Mildew',
+    'Corn Gray Leaf Spot', 'Corn Common Rust', 'Corn Healthy', 'Corn Northern Leaf',
+    'Grape Black Rot', 'Grape Black Measles', 'Grape Healthy', 'Grape Black Rot',
+    'Grape Black Measles', 'Grape Healthy', 'Frape Leaf Blight', 'Orange Haunglongbing',
+    'Peach Bacterial Spot', 'Peach Healthy', 'Potato Early Blight', 'Potato Healthy', 
+    'Potato Late Blight', 'Raspberry Healthy', 'Soybean Healthy', 'Squash Powdery Mildew',
+    'Strawberry Healthy', 'Strawberry Leaf Scorch', 'Tomato Bacterial Spot',
+    'Tomato Early Blight', 'Tomato Late Blight', 'Tomato Leaf Mold',
+    'Tomato Two Spotted Spider', 'Tomato Mosaic Virus', 'Tomato Yellow Leaf Curl Virus',
+    'Tomato Healthy', 'Plant Healthy (Generic)'
+]
+
+TREATMENTS = {
+    'Apple Scab': 'Apply fungicides like Captan or Mancozeb. Rake and destroy fallen leaves.',
+    'Potato Late Blight': 'Use fungicides like Ridomil Gold or Copper sprays. Destroy infected plants immediately.',
+    'Tomato Late Blight': 'Apply fungicides like Mancozeb. Ensure proper air circulation and remove infected leaves.',
+    'Bacterial Spot': 'Apply copper-based sprays. Avoid overhead irrigation.',
+    'Powdery Mildew': 'Apply neem oil or sulfur-based fungicides. Improve spacing for airflow.',
+    'healthy': 'The plant looks healthy! Keep up the good work with regular watering and nutrients.',
+    'default': 'Identify early, remove infected parts, and use appropriate organic or chemical fungicides.'
+}
+
+# --- ROUTES ---
+
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "Online",
+        "message": "Krishi Sahayak AI Backend is Running!",
+        "model_loaded": get_model() is not None
+    })
 
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
-    name = data.get('name')
-    email = data.get('email', '').lower().strip() # Force lowercase
-    password = data.get('password')
+    email = data.get('email', '').lower().strip()
+    if not email: return jsonify({"error": "Email required"}), 400
     
-    if not email or not password:
-        return jsonify({"error": "Email and password required"}), 400
-        
     users = load_users()
-    if email in users:
-        return jsonify({"error": "User already exists"}), 400
+    if email in users: return jsonify({"error": "User already exists"}), 400
     
     users[email] = {
-        "name": name,
-        "password": generate_password_hash(password)
+        "name": data.get('name'),
+        "password": generate_password_hash(data.get('password'))
     }
     save_users(users)
-    print(f"DEBUG: New user registered: {email}")
     return jsonify({"message": "Registration successful"}), 201
 
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
-    email = data.get('email', '').lower().strip() # Force lowercase
-    password = data.get('password')
+    email = data.get('email', '').lower().strip()
+    user = load_users().get(email)
     
-    users = load_users()
-    user = users.get(email)
-    
-    if user and check_password_hash(user['password'], password):
-        print(f"DEBUG: Login success for: {email}")
-        return jsonify({
-            "message": "Login successful",
-            "user": {"name": user['name'], "email": email}
-        }), 200
-    
-    print(f"DEBUG: Login failed for: {email}. User found: {user is not None}")
+    if user and check_password_hash(user['password'], data.get('password')):
+        return jsonify({"message": "Login successful", "user": {"name": user['name'], "email": email}}), 200
     return jsonify({"error": "Invalid email or password"}), 401
-
-# --- AI ROUTES ---
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -88,13 +103,21 @@ def predict():
         img_array = np.expand_dims(np.array(img) / 255.0, axis=0)
         predictions = model.predict(img_array)
         result_idx = np.argmax(predictions[0])
-        return jsonify({'class': 'Tomato Late Blight', 'confidence': '94%', 'treatment': 'Apply Mancozeb'})
+        disease_name = CLASS_NAMES[result_idx] if result_idx < len(CLASS_NAMES) else "Unknown"
+        
+        treatment = TREATMENTS['default']
+        for key in TREATMENTS:
+            if key.lower() in disease_name.lower():
+                treatment = TREATMENTS[key]
+                break
+
+        return jsonify({
+            'class': disease_name,
+            'confidence': f"{float(np.max(predictions[0])) * 100:.1f}%",
+            'treatment': treatment
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-@app.route('/')
-def health():
-    return jsonify({"status": "Online", "service": "Krishi Sahayak AI"})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
