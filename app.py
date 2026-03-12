@@ -33,7 +33,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128), nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False) # Increased length for modern hashes
 
 class DiseaseReport(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -75,31 +75,53 @@ def home():
 
 @app.route('/register', methods=['POST'])
 def register():
-    data = request.json
-    email = data.get('email', '').lower().strip()
-    if User.query.filter_by(email=email).first():
-        return jsonify({"error": "User already exists"}), 400
-    
-    new_user = User(
-        name=data.get('name'),
-        email=email,
-        password_hash=generate_password_hash(data.get('password'))
-    )
-    db.session.add(new_user)
-    db.session.commit()
-    return jsonify({"message": "Registration successful"}), 201
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+            
+        email = data.get('email', '').lower().strip()
+        name = data.get('name')
+        password = data.get('password')
+        
+        if not email or not name or not password:
+            return jsonify({"error": "Missing required fields"}), 400
+
+        if User.query.filter_by(email=email).first():
+            return jsonify({"error": "User already exists"}), 400
+        
+        new_user = User(
+            name=name,
+            email=email,
+            password_hash=generate_password_hash(password)
+        )
+        db.session.add(new_user)
+        db.session.commit()
+        return jsonify({"message": "Registration successful"}), 201
+    except Exception as e:
+        print(f"Registration error: {e}")
+        return jsonify({"error": "Internal server error during registration"}), 500
 
 @app.route('/login', methods=['POST'])
 def login():
-    data = request.json
-    email = data.get('email', '').lower().strip()
-    user = User.query.filter_by(email=email).first()
-    if user and check_password_hash(user.password_hash, data.get('password')):
-        return jsonify({
-            "message": "Login successful", 
-            "user": {"name": user.name, "email": user.email}
-        }), 200
-    return jsonify({"error": "Invalid email or password"}), 401
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+            
+        email = data.get('email', '').lower().strip()
+        password = data.get('password')
+        
+        user = User.query.filter_by(email=email).first()
+        if user and check_password_hash(user.password_hash, password):
+            return jsonify({
+                "message": "Login successful", 
+                "user": {"name": user.name, "email": user.email}
+            }), 200
+        return jsonify({"error": "Invalid email or password"}), 401
+    except Exception as e:
+        print(f"Login error: {e}")
+        return jsonify({"error": "Internal server error during login"}), 500
 
 @app.route('/predict', methods=['POST'])
 def predict():
