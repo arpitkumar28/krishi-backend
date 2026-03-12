@@ -5,7 +5,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from PIL import Image
-import tensorflow as tf
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -16,22 +15,18 @@ CORS(app)
 secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key')
 app.config['SECRET_KEY'] = secret_key
 
-uri = os.environ.get('DATABASE_URL')
-if uri and uri.startswith("postgres://"):
-    uri = uri.replace("postgres://", "postgresql://", 1)
+# Get Database URL and clean it
+raw_uri = os.environ.get('DATABASE_URL', '').strip()
+if raw_uri:
+    if raw_uri.startswith("postgres://"):
+        raw_uri = raw_uri.replace("postgres://", "postgresql://", 1)
+    db_uri = raw_uri
+else:
+    db_uri = 'sqlite:///krishi.db'
 
-db_uri = uri or 'sqlite:///krishi.db'
 app.config['SQLALCHEMY_DATABASE_URI'] = db_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
-
-# Print startup info for Render logs
-print("----------------------------------------")
-print(f"Server starting at {datetime.now()}")
-print(f"Database type: {'PostgreSQL' if uri else 'SQLite (Local Dev)'}")
-if not uri:
-    print("WARNING: DATABASE_URL not found. Using local SQLite.")
-print("----------------------------------------")
 
 # --- DATABASE MODELS ---
 class User(db.Model):
@@ -49,7 +44,7 @@ class DiseaseReport(db.Model):
     image_url = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-# --- ML MODEL CONFIGURATION ---
+# --- ML MODEL CONFIGURATION (Lazy Loading) ---
 MODEL_PATH = 'plant_disease_model.h5'
 _model = None
 
@@ -58,6 +53,7 @@ def get_model():
     if _model is None:
         if os.path.exists(MODEL_PATH):
             try:
+                import tensorflow as tf
                 print(f"Loading model from {MODEL_PATH}...")
                 _model = tf.keras.models.load_model(MODEL_PATH)
                 print("Model loaded successfully!")
@@ -76,10 +72,7 @@ def home():
 def register():
     data = request.json
     email = data.get('email', '').lower().strip()
-    print(f"Register attempt for: {email}")
-    
     if User.query.filter_by(email=email).first():
-        print(f"Register failed: User {email} already exists")
         return jsonify({"error": "User already exists"}), 400
     
     new_user = User(
@@ -89,32 +82,26 @@ def register():
     )
     db.session.add(new_user)
     db.session.commit()
-    print(f"User {email} registered successfully.")
     return jsonify({"message": "Registration successful"}), 201
 
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
     email = data.get('email', '').lower().strip()
-    print(f"Login attempt: {email}")
-    
     user = User.query.filter_by(email=email).first()
     if user and check_password_hash(user.password_hash, data.get('password')):
-        print(f"Login successful: {email}")
         return jsonify({
             "message": "Login successful", 
             "user": {"name": user.name, "email": user.email}
         }), 200
-    
-    print(f"Login failed: {email}")
     return jsonify({"error": "Invalid email or password"}), 401
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    user_email = request.form.get('email', 'anonymous@test.com')
-    print(f"Prediction requested by: {user_email}")
+    # Model will only load when this route is hit
+    model = get_model()
     
-    # Dummy prediction data
+    user_email = request.form.get('email', 'anonymous@test.com')
     prediction = {
         'disease_name': 'Tomato Late Blight',
         'confidence': '94%',
@@ -129,13 +116,10 @@ def predict():
     )
     db.session.add(new_report)
     db.session.commit()
-    print(f"Prediction saved for {user_email}: {prediction['disease_name']}")
-    
     return jsonify(prediction)
 
 @app.route('/reports/<email>', methods=['GET'])
 def get_reports(email):
-    print(f"Fetching reports for: {email}")
     reports = DiseaseReport.query.filter_by(user_email=email).order_by(DiseaseReport.created_at.desc()).all()
     return jsonify([{
         'id': r.id,
@@ -145,11 +129,9 @@ def get_reports(email):
         'date': r.created_at.isoformat()
     } for r in reports])
 
-# --- INITIALIZE DATABASE ---
+# Initialize DB without blocking startup
 with app.app_context():
-    print("Ensuring database tables exist...")
     db.create_all()
-    print("Database initialization complete.")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
