@@ -66,7 +66,12 @@ def get_model():
 # --- ROUTES ---
 @app.route('/')
 def home():
-    return jsonify({"status": "Online", "message": "Krishi Sahayak AI Backend is Running!"})
+    model_found = os.path.exists(MODEL_PATH)
+    return jsonify({
+        "status": "Online", 
+        "message": "Krishi Sahayak AI Backend is Running!",
+        "model_status": "Ready" if model_found else "Missing (.h5 file not found)"
+    })
 
 @app.route('/register', methods=['POST'])
 def register():
