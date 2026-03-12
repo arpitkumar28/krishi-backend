@@ -4,3 +4,5 @@ tensorflow-cpu
 pillow
 numpy
 gunicorn
+flask-sqlalchemy
+psycopg2-binary
