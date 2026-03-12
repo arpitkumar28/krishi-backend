@@ -1,5 +1,6 @@
 import os
 import io
+import gc
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -83,11 +84,12 @@ def get_model():
             try:
                 print(f"Loading model from {MODEL_PATH}...")
                 import tensorflow as tf
-                # Optimization for limited RAM
+                # Memory efficient loading
                 _model = tf.keras.models.load_model(MODEL_PATH, compile=False)
                 print("Model loaded successfully!")
             except Exception as e:
                 print(f"ERROR loading model: {e}")
+                return None
         else:
             print(f"WARNING: {MODEL_PATH} not found!")
     return _model
@@ -189,7 +191,7 @@ def predict():
         
         model = get_model()
         if model is None:
-            return jsonify({"error": "Model failed to load on server (RAM limit?)"}), 500
+            return jsonify({"error": "Model could not be loaded. This is likely due to memory limits on the server."}), 503
 
         img_array = preprocess_image(file.read())
         if img_array is None:
@@ -208,6 +210,10 @@ def predict():
         )
         db.session.add(new_report)
         db.session.commit()
+        
+        # Cleanup
+        del img_array
+        gc.collect()
 
         return jsonify({"disease_name": disease_name, "confidence": f"{confidence*100:.1f}%", "treatment": treatment})
     except Exception as e:
