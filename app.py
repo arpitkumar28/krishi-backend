@@ -33,7 +33,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.Text, nullable=False) # Changed to Text for unlimited length
+    password_hash = db.Column(db.Text, nullable=False) 
 
 class DiseaseReport(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -68,6 +68,8 @@ def home():
 def register():
     try:
         data = request.get_json()
+        if not data: return jsonify({"error": "No data"}), 400
+        
         email = data.get('email', '').lower().strip()
         name = data.get('name')
         password = data.get('password')
@@ -97,11 +99,16 @@ def login():
         data = request.get_json()
         email = data.get('email', '').lower().strip()
         password = data.get('password')
+        
         user = User.query.filter_by(email=email).first()
         if user and check_password_hash(user.password_hash, password):
-            return jsonify({"message": "Login successful", "user": {"name": user.name, "email": user.email}}), 200
+            return jsonify({
+                "message": "Login successful", 
+                "user": {"name": user.name, "email": user.email}
+            }), 200
         return jsonify({"error": "Invalid email or password"}), 401
     except Exception as e:
+        print(f"Login error: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/predict', methods=['POST'])
@@ -120,17 +127,9 @@ def get_reports(email):
     return jsonify([{'id': r.id, 'diseaseName': r.disease_name, 'confidence': r.confidence, 
                      'treatment': r.treatment, 'date': r.created_at.isoformat()} for r in reports])
 
-# Initialize DB
+# Initialize DB (Safe initialization)
 with app.app_context():
-    print("RE-INITIALIZING DATABASE...")
-    try:
-        # Force a manual table drop if exists to ensure schema sync
-        db.session.execute(db.text('DROP TABLE IF EXISTS "user" CASCADE'))
-        db.session.commit()
-        db.create_all()
-        print("DATABASE INITIALIZED SUCCESSFULLY")
-    except Exception as e:
-        print(f"DATABASE INIT ERROR: {e}")
+    db.create_all()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
