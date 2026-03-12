@@ -34,7 +34,6 @@ class User(db.Model):
     name = db.Column(db.String(80), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.Text, nullable=False)
-    # Profile Fields
     title = db.Column(db.String(100), default="Progressive Farmer")
     location = db.Column(db.String(100), default="Bihar, India")
     land_size = db.Column(db.String(20), default="5 Acres")
@@ -82,19 +81,28 @@ def get_model():
     if _model is None:
         if os.path.exists(MODEL_PATH):
             try:
+                print(f"Loading model from {MODEL_PATH}...")
                 import tensorflow as tf
-                _model = tf.keras.models.load_model(MODEL_PATH)
+                # Optimization for limited RAM
+                _model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+                print("Model loaded successfully!")
             except Exception as e:
                 print(f"ERROR loading model: {e}")
+        else:
+            print(f"WARNING: {MODEL_PATH} not found!")
     return _model
 
 def preprocess_image(image_bytes, target_size=(256, 256)):
-    img = Image.open(io.BytesIO(image_bytes))
-    img = img.convert('RGB')
-    img = img.resize(target_size)
-    img_array = np.array(img) / 255.0
-    img_array = np.expand_dims(img_array, axis=0)
-    return img_array
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img = img.convert('RGB')
+        img = img.resize(target_size)
+        img_array = np.array(img) / 255.0
+        img_array = np.expand_dims(img_array, axis=0).astype(np.float32)
+        return img_array
+    except Exception as e:
+        print(f"Preprocessing error: {e}")
+        return None
 
 # --- ROUTES ---
 @app.route('/')
@@ -129,13 +137,9 @@ def login():
             return jsonify({
                 "message": "Login successful", 
                 "user": {
-                    "name": user.name, 
-                    "email": user.email,
-                    "title": user.title,
-                    "location": user.location,
-                    "land_size": user.land_size,
-                    "crop_types": user.crop_types,
-                    "orders_count": user.orders_count
+                    "name": user.name, "email": user.email, "title": user.title,
+                    "location": user.location, "land_size": user.land_size,
+                    "crop_types": user.crop_types, "orders_count": user.orders_count
                 }
             }), 200
         return jsonify({"error": "Invalid credentials"}), 401
@@ -145,41 +149,70 @@ def login():
 @app.route('/profile/<email>', methods=['GET'])
 def get_profile(email):
     user = User.query.filter_by(email=email.lower().strip()).first()
-    if not user:
-        return jsonify({"error": "User not found"}), 404
+    if not user: return jsonify({"error": "User not found"}), 404
     return jsonify({
-        "name": user.name,
-        "email": user.email,
-        "title": user.title,
-        "location": user.location,
-        "land_size": user.land_size,
-        "crop_types": user.crop_types,
-        "orders_count": user.orders_count
+        "name": user.name, "email": user.email, "title": user.title,
+        "location": user.location, "land_size": user.land_size,
+        "crop_types": user.crop_types, "orders_count": user.orders_count
     })
+
+@app.route('/update_profile', methods=['POST'])
+def update_profile():
+    try:
+        data = request.get_json()
+        email = data.get('email', '').lower().strip()
+        user = User.query.filter_by(email=email).first()
+        if not user: return jsonify({"error": "User not found"}), 404
+        user.name = data.get('name', user.name)
+        user.title = data.get('title', user.title)
+        user.location = data.get('location', user.location)
+        user.land_size = data.get('land_size', user.land_size)
+        user.crop_types = data.get('crop_types', user.crop_types)
+        db.session.commit()
+        return jsonify({"message": "Profile updated", "user": {
+            "name": user.name, "email": user.email, "title": user.title,
+            "location": user.location, "land_size": user.land_size,
+            "crop_types": user.crop_types, "orders_count": user.orders_count
+        }}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
         if 'file' not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
+        
         file = request.files['file']
         user_email = request.form.get('email', 'anonymous')
+        
         model = get_model()
         if model is None:
-            return jsonify({"disease_name": "Service Unavailable", "confidence": "0%", "treatment": "Model not found"}), 200
+            return jsonify({"error": "Model failed to load on server (RAM limit?)"}), 500
+
         img_array = preprocess_image(file.read())
+        if img_array is None:
+            return jsonify({"error": "Invalid image format"}), 400
+
         predictions = model.predict(img_array)
         class_idx = np.argmax(predictions[0])
         confidence = float(np.max(predictions[0]))
+        
         disease_name = CLASS_NAMES[class_idx] if class_idx < len(CLASS_NAMES) else "Unknown"
         treatment = TREATMENTS.get(disease_name, "Consult an expert.")
-        new_report = DiseaseReport(user_email=user_email, disease_name=disease_name, 
-                                   confidence=f"{confidence*100:.1f}%", treatment=treatment)
+
+        new_report = DiseaseReport(
+            user_email=user_email, disease_name=disease_name,
+            confidence=f"{confidence*100:.1f}%", treatment=treatment
+        )
         db.session.add(new_report)
         db.session.commit()
+
         return jsonify({"disease_name": disease_name, "confidence": f"{confidence*100:.1f}%", "treatment": treatment})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Prediction logic error: {e}")
+        return jsonify({"error": f"Server processing error: {str(e)}"}), 500
 
 @app.route('/reports/<email>', methods=['GET'])
 def get_reports(email):
@@ -189,7 +222,6 @@ def get_reports(email):
 
 # Initialize DB
 with app.app_context():
-    # Force add new columns to existing table if using PostgreSQL
     try:
         db.session.execute(text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS title VARCHAR(100) DEFAULT \'Progressive Farmer\''))
         db.session.execute(text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS location VARCHAR(100) DEFAULT \'Bihar, India\''))
@@ -197,10 +229,9 @@ with app.app_context():
         db.session.execute(text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS crop_types INTEGER DEFAULT 3'))
         db.session.execute(text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS orders_count INTEGER DEFAULT 12'))
         db.session.commit()
-    except Exception as e:
-        print(f"Migration notice: {e}")
+    except Exception: pass
     db.create_all()
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
