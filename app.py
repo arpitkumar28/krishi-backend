@@ -14,7 +14,6 @@ app = Flask(__name__)
 CORS(app)
 
 # --- CONFIGURATION ---
-# Set your Gemini API Key in Render Environment Variables as GEMINI_API_KEY
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY', 'YOUR_API_KEY_HERE')
 genai.configure(api_key=GEMINI_KEY)
 
@@ -64,40 +63,17 @@ def predict():
         if 'file' not in request.files: return jsonify({"error": "No file"}), 400
         file = request.files['file']
         user_email = request.form.get('email', 'anonymous')
-        
-        # Load image for Gemini
         img = Image.open(file)
-        
-        # Call Gemini AI
         model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = """
-        Analyze this plant leaf image. Provide the result in JSON format:
-        {
-          "disease_name": "Name of disease or 'Healthy'",
-          "confidence": "Estimated confidence percentage",
-          "treatment": "Short recommended treatment"
-        }
-        Only return the JSON.
-        """
-        
+        prompt = "Analyze this plant leaf. Return JSON: {\"disease_name\": \"...\", \"confidence\": \"...%\", \"treatment\": \"...\"}"
         response = model.generate_content([prompt, img])
-        # Clean the response to ensure it's valid JSON
         json_str = response.text.replace('```json', '').replace('```', '').strip()
         res = json.loads(json_str)
-        
-        # Save to DB with "Proper Date" (datetime.utcnow)
-        new_report = DiseaseReport(
-            user_email=user_email, 
-            disease_name=res['disease_name'], 
-            confidence=res['confidence'], 
-            treatment=res['treatment']
-        )
+        new_report = DiseaseReport(user_email=user_email, disease_name=res['disease_name'], confidence=res['confidence'], treatment=res['treatment'])
         db.session.add(new_report)
         db.session.commit()
-        
         return jsonify(res)
-    except Exception as e:
-        return jsonify({"error": f"Gemini Error: {str(e)}"}), 500
+    except Exception as e: return jsonify({"error": str(e)}), 500
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -121,16 +97,39 @@ def register():
         return jsonify({"message": "Registration successful"}), 201
     except Exception as e: return jsonify({"error": str(e)}), 500
 
+@app.route('/update_profile', methods=['POST'])
+def update_profile():
+    try:
+        data = request.get_json()
+        user = User.query.filter_by(email=data.get('email', '').lower().strip()).first()
+        if not user: return jsonify({"error": "User not found"}), 404
+        user.name = data.get('name', user.name)
+        user.title = data.get('title', user.title)
+        user.location = data.get('location', user.location)
+        user.land_size = data.get('land_size', user.land_size)
+        user.crop_types = data.get('crop_types', user.crop_types)
+        db.session.commit()
+        return jsonify({"message": "Profile updated", "user": {"name": user.name, "email": user.email, "title": user.title, "location": user.location, "land_size": user.land_size, "crop_types": user.crop_types, "orders_count": user.orders_count}}), 200
+    except Exception as e: return jsonify({"error": str(e)}), 500
+
+@app.route('/crops/<email>', methods=['GET'])
+def get_crops(email):
+    return jsonify([
+        {"name": "Tomato", "area": "2.5 Acres", "status": "Healthy"},
+        {"name": "Potato", "area": "1.5 Acres", "status": "Needs Care"}
+    ])
+
+@app.route('/transactions/<email>', methods=['GET'])
+def get_transactions(email):
+    return jsonify([
+        {"id": 1, "item": "Organic NPK", "amount": "₹1,250", "date": "Mar 12, 2024"},
+        {"id": 2, "item": "Hybrid Seeds", "amount": "₹450", "date": "Mar 05, 2024"}
+    ])
+
 @app.route('/reports/<email>', methods=['GET'])
 def get_reports(email):
     reports = DiseaseReport.query.filter_by(user_email=email).order_by(DiseaseReport.created_at.desc()).all()
-    return jsonify([{
-        'id': r.id, 
-        'diseaseName': r.disease_name, 
-        'confidence': r.confidence, 
-        'treatment': r.treatment, 
-        'date': r.created_at.isoformat() # This provides the 'proper date' to your Flutter app
-    } for r in reports])
+    return jsonify([{'id': r.id, 'diseaseName': r.disease_name, 'confidence': r.confidence, 'treatment': r.treatment, 'date': r.created_at.isoformat()} for r in reports])
 
 # Initialize DB
 with app.app_context():
