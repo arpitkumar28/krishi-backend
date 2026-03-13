@@ -1,6 +1,7 @@
 import os
 import io
-import numpy as np
+import json
+import google.generativeai as genai
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -13,6 +14,10 @@ app = Flask(__name__)
 CORS(app)
 
 # --- CONFIGURATION ---
+# Set your Gemini API Key in Render Environment Variables as GEMINI_API_KEY
+GEMINI_KEY = os.environ.get('GEMINI_API_KEY', 'YOUR_API_KEY_HERE')
+genai.configure(api_key=GEMINI_KEY)
+
 secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key')
 app.config['SECRET_KEY'] = secret_key
 
@@ -48,57 +53,51 @@ class DiseaseReport(db.Model):
     treatment = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-class Transaction(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_email = db.Column(db.String(120), nullable=False)
-    item = db.Column(db.String(100))
-    amount = db.Column(db.String(20))
-    date = db.Column(db.DateTime, default=datetime.utcnow)
-
-class Crop(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_email = db.Column(db.String(120), nullable=False)
-    name = db.Column(db.String(100))
-    area = db.Column(db.String(50))
-    status = db.Column(db.String(50))
-
-# --- ML MODEL CONFIGURATION (SAFE LOADING) ---
-MODEL_PATH = 'plant_disease_model.h5'
-
-def get_prediction(image_file):
-    """
-    Attempts to use the model, but falls back to a realistic mock 
-    if the server is low on RAM to prevent 500 crashes.
-    """
-    try:
-        # If we are on Render Free Tier, we skip heavy TF to avoid 500 error
-        if os.environ.get('RENDER'):
-             return {"disease_name": "Tomato Late Blight", "confidence": "96.5%", "treatment": "Apply copper-based fungicides. Ensure good air circulation."}
-        
-        # Local or High-RAM environment logic
-        import tensorflow as tf
-        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-        # ... real prediction logic ...
-        return {"disease_name": "Tomato Late Blight", "confidence": "94%", "treatment": "Apply fungicides."}
-    except Exception:
-        return {"disease_name": "Tomato Late Blight", "confidence": "98.2%", "treatment": "Apply fungicides containing chlorothalonil. Remove infected leaves."}
-
 # --- ROUTES ---
 @app.route('/')
 def home():
-    return jsonify({"status": "Online", "message": "Krishi Sahayak API Running"})
+    return jsonify({"status": "Online", "message": "Krishi Sahayak AI Backend Running"})
 
-@app.route('/register', methods=['POST'])
-def register():
+@app.route('/predict', methods=['POST'])
+def predict():
     try:
-        data = request.get_json()
-        email = data.get('email', '').lower().strip()
-        if User.query.filter_by(email=email).first(): return jsonify({"error": "User already exists"}), 400
-        new_user = User(name=data.get('name'), email=email, password_hash=generate_password_hash(data.get('password')))
-        db.session.add(new_user)
+        if 'file' not in request.files: return jsonify({"error": "No file"}), 400
+        file = request.files['file']
+        user_email = request.form.get('email', 'anonymous')
+        
+        # Load image for Gemini
+        img = Image.open(file)
+        
+        # Call Gemini AI
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = """
+        Analyze this plant leaf image. Provide the result in JSON format:
+        {
+          "disease_name": "Name of disease or 'Healthy'",
+          "confidence": "Estimated confidence percentage",
+          "treatment": "Short recommended treatment"
+        }
+        Only return the JSON.
+        """
+        
+        response = model.generate_content([prompt, img])
+        # Clean the response to ensure it's valid JSON
+        json_str = response.text.replace('```json', '').replace('```', '').strip()
+        res = json.loads(json_str)
+        
+        # Save to DB with "Proper Date" (datetime.utcnow)
+        new_report = DiseaseReport(
+            user_email=user_email, 
+            disease_name=res['disease_name'], 
+            confidence=res['confidence'], 
+            treatment=res['treatment']
+        )
+        db.session.add(new_report)
         db.session.commit()
-        return jsonify({"message": "Registration successful"}), 201
-    except Exception as e: return jsonify({"error": str(e)}), 500
+        
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"error": f"Gemini Error: {str(e)}"}), 500
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -110,50 +109,28 @@ def login():
         return jsonify({"error": "Invalid email or password"}), 401
     except Exception as e: return jsonify({"error": str(e)}), 500
 
-@app.route('/update_profile', methods=['POST'])
-def update_profile():
+@app.route('/register', methods=['POST'])
+def register():
     try:
         data = request.get_json()
-        user = User.query.filter_by(email=data.get('email', '').lower().strip()).first()
-        if not user: return jsonify({"error": "User not found"}), 404
-        user.name = data.get('name', user.name)
-        user.title = data.get('title', user.title)
-        user.location = data.get('location', user.location)
-        user.land_size = data.get('land_size', user.land_size)
-        user.crop_types = data.get('crop_types', user.crop_types)
+        email = data.get('email', '').lower().strip()
+        if User.query.filter_by(email=email).first(): return jsonify({"error": "User exists"}), 400
+        new_user = User(name=data.get('name'), email=email, password_hash=generate_password_hash(data.get('password')))
+        db.session.add(new_user)
         db.session.commit()
-        return jsonify({"message": "Profile updated", "user": {"name": user.name, "email": user.email, "title": user.title, "location": user.location, "land_size": user.land_size, "crop_types": user.crop_types, "orders_count": user.orders_count}}), 200
+        return jsonify({"message": "Registration successful"}), 201
     except Exception as e: return jsonify({"error": str(e)}), 500
 
-@app.route('/predict', methods=['POST'])
-def predict():
-    try:
-        user_email = request.form.get('email', 'anonymous')
-        res = get_prediction(None)
-        new_report = DiseaseReport(user_email=user_email, disease_name=res['disease_name'], confidence=res['confidence'], treatment=res['treatment'])
-        db.session.add(new_report)
-        db.session.commit()
-        return jsonify(res)
-    except Exception as e: return jsonify({"error": f"Internal Error: {str(e)}"}), 500
-
-@app.route('/crops/<email>', methods=['GET'])
-def get_crops(email):
-    crops = Crop.query.filter_by(user_email=email).all()
-    if not crops:
-        return jsonify([{"name": "Tomato", "area": "2 Acres", "status": "Healthy"}, {"name": "Potato", "area": "3 Acres", "status": "Needs Attention"}])
-    return jsonify([{"name": c.name, "area": c.area, "status": c.status} for c in crops])
-
-@app.route('/transactions/<email>', methods=['GET'])
-def get_transactions(email):
-    return jsonify([
-        {"id": 1, "item": "Organic Fertilizer (50kg)", "amount": "₹1,200", "date": "2024-03-11"},
-        {"id": 2, "item": "Tomato Seeds (Hybrid)", "amount": "₹450", "date": "2024-03-05"},
-        {"id": 3, "item": "Copper Fungicide", "amount": "₹800", "date": "2024-02-28"}
-    ])
-
-@app.route('/support', methods=['POST'])
-def contact_support():
-    return jsonify({"message": "Support ticket created. Our team will contact you within 24 hours."})
+@app.route('/reports/<email>', methods=['GET'])
+def get_reports(email):
+    reports = DiseaseReport.query.filter_by(user_email=email).order_by(DiseaseReport.created_at.desc()).all()
+    return jsonify([{
+        'id': r.id, 
+        'diseaseName': r.disease_name, 
+        'confidence': r.confidence, 
+        'treatment': r.treatment, 
+        'date': r.created_at.isoformat() # This provides the 'proper date' to your Flutter app
+    } for r in reports])
 
 # Initialize DB
 with app.app_context():
