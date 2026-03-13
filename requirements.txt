@@ -1,6 +1,6 @@
 flask
 flask-cors
-tensorflow-cpu
+google-generativeai
 pillow
 numpy
 gunicorn
