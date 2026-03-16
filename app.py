@@ -112,6 +112,52 @@ def update_profile():
         return jsonify({"message": "Profile updated", "user": {"name": user.name, "email": user.email, "title": user.title, "location": user.location, "land_size": user.land_size, "crop_types": user.crop_types, "orders_count": user.orders_count}}), 200
     except Exception as e: return jsonify({"error": str(e)}), 500
 
+# --- HOME PAGE SECTIONS ---
+
+@app.route('/weather/<location>', methods=['GET'])
+def get_weather(location):
+    # In a real app, this would call a Weather API
+    return jsonify({
+        "location": location or "Patna, Bihar",
+        "temperature": 29.0,
+        "condition": "Partly Cloudy",
+        "advice": "Ideal weather for field work!"
+    })
+
+@app.route('/market-prices', methods=['GET'])
+def get_market_prices():
+    return jsonify([
+        {"name": "Wheat", "category": "Grains", "price": "₹2,100", "unit": "quintal"},
+        {"name": "Tomato", "category": "Vegetables", "price": "₹1,800", "unit": "quintal"},
+        {"name": "Potato", "category": "Vegetables", "price": "₹1,200", "unit": "quintal"},
+        {"name": "Mustard", "category": "Oilseeds", "price": "₹5,400", "unit": "quintal"},
+        {"name": "Rice", "category": "Grains", "price": "₹3,200", "unit": "quintal"}
+    ])
+
+@app.route('/agri-store', methods=['GET'])
+def get_store_items():
+    return jsonify([
+        {"id": 1, "name": "Organic NPK Fertilizer", "price": "₹1,250", "image": "https://placehold.co/100"},
+        {"id": 2, "name": "Hybrid Wheat Seeds", "price": "₹450", "image": "https://placehold.co/100"},
+        {"id": 3, "name": "Neem Oil Pesticide", "price": "₹320", "image": "https://placehold.co/100"}
+    ])
+
+@app.route('/community/posts', methods=['GET'])
+def get_community_posts():
+    return jsonify([
+        {"id": 1, "author": "Rajesh Kumar", "content": "My tomato crops are doing great this season thanks to the new irrigation tech!", "likes": 24},
+        {"id": 2, "author": "Amit Singh", "content": "Anyone else seeing yellowing of leaves in wheat?", "likes": 12}
+    ])
+
+@app.route('/weather/alerts', methods=['GET'])
+def get_weather_alerts():
+    return jsonify([
+        {"id": 1, "type": "Warning", "message": "Heavy rain expected in 48 hours. Secure your harvests."},
+        {"id": 2, "type": "Info", "message": "Temperature set to rise next week. Increase irrigation frequency."}
+    ])
+
+# --- PROFILE DATA ---
+
 @app.route('/crops/<email>', methods=['GET'])
 def get_crops(email):
     return jsonify([
