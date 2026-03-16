@@ -4,7 +4,7 @@ from models import db, User
 
 auth_bp = Blueprint('auth', __name__)
 
-@app.route('/login', methods=['POST'])
+@auth_bp.route('/login', methods=['POST'])
 def login():
     try:
         data = request.get_json()
@@ -14,7 +14,7 @@ def login():
         return jsonify({"error": "Invalid email or password"}), 401
     except Exception as e: return jsonify({"error": str(e)}), 500
 
-@app.route('/register', methods=['POST'])
+@auth_bp.route('/register', methods=['POST'])
 def register():
     try:
         data = request.get_json()
@@ -26,7 +26,7 @@ def register():
         return jsonify({"message": "Registration successful"}), 201
     except Exception as e: return jsonify({"error": str(e)}), 500
 
-@app.route('/profile/<email>', methods=['GET'])
+@auth_bp.route('/profile/<email>', methods=['GET'])
 def get_user_profile(email):
     try:
         user = User.query.filter_by(email=email.lower().strip()).first()
@@ -42,7 +42,7 @@ def get_user_profile(email):
         }), 200
     except Exception as e: return jsonify({"error": str(e)}), 500
 
-@app.route('/update_profile', methods=['POST'])
+@auth_bp.route('/update_profile', methods=['POST'])
 def update_profile():
     try:
         data = request.get_json()

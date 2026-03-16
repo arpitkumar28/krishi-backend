@@ -4,6 +4,8 @@ from flask_cors import CORS
 from models import db
 from auth_routes import auth_bp
 from shop_routes import shop_bp
+from disease_routes import disease_bp
+from home_routes import home_bp
 
 app = Flask(__name__)
 CORS(app)
@@ -29,30 +31,12 @@ db.init_app(app)
 # Register Blueprints
 app.register_blueprint(auth_bp)
 app.register_blueprint(shop_bp)
+app.register_blueprint(disease_bp)
+app.register_blueprint(home_bp)
 
 @app.route('/')
 def home():
     return jsonify({"status": "Online", "message": "Krishi Sahayak API Backend Running"})
-
-# --- HOME PAGE SECTIONS ---
-@app.route('/weather/<location>', methods=['GET'])
-def get_weather(location):
-    return jsonify({
-        "location": location or "Patna, Bihar",
-        "temperature": 29.0,
-        "condition": "Partly Cloudy",
-        "advice": "Ideal weather for field work!"
-    })
-
-@app.route('/market-prices', methods=['GET'])
-def get_market_prices():
-    return jsonify([
-        {"name": "Wheat", "category": "Grains", "price": "₹2,100", "unit": "quintal"},
-        {"name": "Tomato", "category": "Vegetables", "price": "₹1,800", "unit": "quintal"},
-        {"name": "Potato", "category": "Vegetables", "price": "₹1,200", "unit": "quintal"},
-        {"name": "Mustard", "category": "Oilseeds", "price": "₹5,400", "unit": "quintal"},
-        {"name": "Rice", "category": "Grains", "price": "₹3,200", "unit": "quintal"}
-    ])
 
 # Initialize DB Tables
 with app.app_context():
