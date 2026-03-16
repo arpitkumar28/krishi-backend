@@ -136,11 +136,20 @@ def get_market_prices():
 
 @app.route('/agri-store', methods=['GET'])
 def get_store_items():
-    return jsonify([
-        {"id": 1, "name": "Organic NPK Fertilizer", "price": "₹1,250", "image": "https://placehold.co/100"},
-        {"id": 2, "name": "Hybrid Wheat Seeds", "price": "₹450", "image": "https://placehold.co/100"},
-        {"id": 3, "name": "Neem Oil Pesticide", "price": "₹320", "image": "https://placehold.co/100"}
-    ])
+    category = request.args.get('category', 'All')
+    products = [
+        {"id": 1, "name": "Mancozeb Fungicide", "category": "Fungicide", "price": "₹450", "image": "https://placehold.co/100"},
+        {"id": 2, "name": "Neem Oil (Organic)", "category": "Pesticide", "price": "₹280", "image": "https://placehold.co/100"},
+        {"id": 3, "name": "NPK Fertilizer", "category": "Fertilizer", "price": "₹1,200", "image": "https://placehold.co/100"},
+        {"id": 4, "name": "Urea (Bag)", "category": "Fertilizer", "price": "₹266", "image": "https://placehold.co/100"},
+        {"id": 5, "name": "Copper Fungicide", "category": "Fungicide", "price": "₹380", "image": "https://placehold.co/100"},
+        {"id": 6, "name": "Hybrid Maize Seeds", "category": "Seed", "price": "₹550", "image": "https://placehold.co/100"}
+    ]
+    
+    if category != 'All' and category != 'All Products':
+        products = [p for p in products if p['category'].lower() == category.lower()]
+        
+    return jsonify(products)
 
 @app.route('/community/posts', methods=['GET'])
 def get_community_posts():
