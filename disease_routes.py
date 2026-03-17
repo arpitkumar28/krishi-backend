@@ -8,8 +8,9 @@ from models import db, DiseaseReport
 disease_bp = Blueprint('disease', __name__)
 
 # --- CONFIGURATION ---
-GEMINI_KEY = os.environ.get('GEMINI_API_KEY', 'YOUR_API_KEY_HERE')
-genai.configure(api_key=GEMINI_KEY)
+GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
 
 @disease_bp.route('/predict', methods=['POST'])
 def predict():
@@ -21,32 +22,54 @@ def predict():
         user_email = request.form.get('email', 'anonymous')
         img = Image.open(file)
         
-        # Try real Gemini Analysis first
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            prompt = "Analyze this plant leaf. Return JSON: {\"disease_name\": \"...\", \"confidence\": \"...%\", \"treatment\": \"...\"}"
-            response = model.generate_content([prompt, img])
-            json_str = response.text.replace('```json', '').replace('```', '').strip()
-            res = json.loads(json_str)
-        except Exception:
-            # Fallback to Mock Data if API fails/key is missing
-            res = {
-                "disease_name": "Tomato Late Blight",
-                "confidence": "92%",
-                "treatment": "Apply copper-based fungicides and remove infected leaves."
-            }
+        if not GEMINI_KEY or GEMINI_KEY == 'YOUR_API_KEY_HERE':
+            return jsonify({
+                "disease_name": "Configuration Error",
+                "confidence": "0%",
+                "treatment": "GEMINI_API_KEY is missing in backend environment variables."
+            }), 200
+
+        # AI Analysis
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = (
+            "Analyze this plant leaf image. "
+            "1. Identify the disease name (or 'Healthy' if no disease). "
+            "2. Provide a confidence percentage. "
+            "3. Provide a brief treatment recommendation. "
+            "Return ONLY a JSON object: "
+            "{\"disease_name\": \"...\", \"confidence\": \"...%\", \"treatment\": \"...\"}"
+        )
+        
+        response = model.generate_content([prompt, img])
+        
+        # Parse JSON strictly
+        text_response = response.text.strip()
+        if '```json' in text_response:
+            text_response = text_response.split('```json')[1].split('```')[0].strip()
+        elif '{' in text_response:
+            text_response = text_response[text_response.find('{'):text_response.rfind('}')+1]
             
+        res = json.loads(text_response)
+        
+        # Save to Database
         new_report = DiseaseReport(
             user_email=user_email,
-            disease_name=res['disease_name'],
-            confidence=res['confidence'],
-            treatment=res['treatment']
+            disease_name=res.get('disease_name', 'Unknown'),
+            confidence=res.get('confidence', '0%'),
+            treatment=res.get('treatment', 'No treatment info available.')
         )
         db.session.add(new_report)
         db.session.commit()
+        
         return jsonify(res)
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"ERROR: {str(e)}")
+        return jsonify({
+            "disease_name": "AI Error",
+            "confidence": "0%",
+            "treatment": f"Error: {str(e)}"
+        }), 200
 
 @disease_bp.route('/reports/<email>', methods=['GET'])
 def get_reports(email):
