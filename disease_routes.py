@@ -10,6 +10,7 @@ disease_bp = Blueprint('disease', __name__)
 # --- CONFIGURATION ---
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 if GEMINI_KEY:
+    # Explicitly configure the API to use v1beta for better model availability
     genai.configure(api_key=GEMINI_KEY)
 
 @disease_bp.route('/predict', methods=['POST'])
@@ -22,41 +23,51 @@ def predict():
         user_email = request.form.get('email', 'anonymous')
         img = Image.open(file)
         
-        if not GEMINI_KEY or GEMINI_KEY == 'YOUR_API_KEY_HERE':
+        if not GEMINI_KEY:
             return jsonify({
-                "disease_name": "Configuration Error",
+                "disease_name": "API Key Missing",
                 "confidence": "0%",
-                "treatment": "GEMINI_API_KEY is missing in backend environment variables."
+                "treatment": "Please set GEMINI_API_KEY in Render."
             }), 200
 
-        # AI Analysis
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = (
-            "Analyze this plant leaf image. "
-            "1. Identify the disease name (or 'Healthy' if no disease). "
-            "2. Provide a confidence percentage. "
-            "3. Provide a brief treatment recommendation. "
-            "Return ONLY a JSON object: "
-            "{\"disease_name\": \"...\", \"confidence\": \"...%\", \"treatment\": \"...\"}"
-        )
+        # Try multiple model name variants for robustness
+        success = False
+        res = {}
+        # List of models to try in order of preference
+        models_to_try = ['gemini-1.5-flash', 'gemini-pro-vision']
         
-        response = model.generate_content([prompt, img])
-        
-        # Parse JSON strictly
-        text_response = response.text.strip()
-        if '```json' in text_response:
-            text_response = text_response.split('```json')[1].split('```')[0].strip()
-        elif '{' in text_response:
-            text_response = text_response[text_response.find('{'):text_response.rfind('}')+1]
-            
-        res = json.loads(text_response)
-        
+        for model_name in models_to_try:
+            try:
+                model = genai.GenerativeModel(model_name)
+                prompt = (
+                    "Analyze this plant leaf. If it is a leaf, identify the disease and give treatment. "
+                    "Return ONLY JSON: {\"disease_name\": \"...\", \"confidence\": \"...%\", \"treatment\": \"...\"}"
+                )
+                response = model.generate_content([prompt, img])
+                
+                # Parse response
+                text = response.text.strip()
+                if '```json' in text:
+                    text = text.split('```json')[1].split('```')[0].strip()
+                elif '{' in text:
+                    text = text[text.find('{'):text.rfind('}')+1]
+                
+                res = json.loads(text)
+                success = True
+                break # Exit loop if successful
+            except Exception as e:
+                print(f"FAILED with {model_name}: {str(e)}")
+                continue
+
+        if not success:
+            raise Exception("All Gemini models failed. This usually means the API key lacks access or the library is outdated on the server.")
+
         # Save to Database
         new_report = DiseaseReport(
             user_email=user_email,
             disease_name=res.get('disease_name', 'Unknown'),
             confidence=res.get('confidence', '0%'),
-            treatment=res.get('treatment', 'No treatment info available.')
+            treatment=res.get('treatment', 'No treatment info.')
         )
         db.session.add(new_report)
         db.session.commit()
@@ -64,11 +75,10 @@ def predict():
         return jsonify(res)
 
     except Exception as e:
-        print(f"ERROR: {str(e)}")
         return jsonify({
             "disease_name": "AI Error",
             "confidence": "0%",
-            "treatment": f"Error: {str(e)}"
+            "treatment": f"Final Error: {str(e)}. Tip: Go to Render Dashboard -> Manual Deploy -> Clear Cache & Deploy."
         }), 200
 
 @disease_bp.route('/reports/<email>', methods=['GET'])
