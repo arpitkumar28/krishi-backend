@@ -12,7 +12,8 @@ disease_bp = Blueprint('disease', __name__)
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 client = None
 if GEMINI_KEY:
-    client = genai.Client(api_key=GEMINI_KEY)
+    # Force the stable v1 API to avoid v1beta 404 issues
+    client = genai.Client(api_key=GEMINI_KEY, http_options={'api_version': 'v1'})
 
 @disease_bp.route('/predict', methods=['POST'])
 def predict():
@@ -23,7 +24,6 @@ def predict():
         file = request.files['file']
         user_email = request.form.get('email', 'anonymous')
         
-        # 1. OPTIMIZE IMAGE: Resize for speed and reliability
         img = Image.open(file)
         if img.mode != 'RGB':
             img = img.convert('RGB')
@@ -36,33 +36,33 @@ def predict():
                 "treatment": "Please set GEMINI_API_KEY in Render settings."
             }), 200
 
-        # 2. RESILIENT MODEL LOOP
-        # We try multiple models to avoid 404 or 429 (Quota) errors
-        models_to_try = [
-            "gemini-2.0-flash", 
-            "gemini-1.5-flash", 
-            "gemini-2.0-flash-lite", 
-            "gemini-1.5-flash-latest"
-        ]
+        # Try standard model names without '-latest' suffixes which often 404
+        models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
         
         prompt = (
-            "Analyze this plant leaf. If it has a disease, name it and give treatment. "
-            "If healthy, say 'Healthy'. Return ONLY a JSON object: "
-            "{\"disease_name\": \"...\", \"confidence\": \"...%\", \"treatment\": \"...\"}"
+            "Analyze this plant leaf. Identify the disease and give treatment. "
+            "Return ONLY JSON: {\"disease_name\": \"...\", \"confidence\": \"...%\", \"treatment\": \"...\"}"
         )
         
         response = None
         last_error = ""
         
+        # MODEL DISCOVERY LOG (Check Render logs to see this)
+        try:
+            print("--- Available Models ---")
+            for m in client.models.list():
+                print(f"Model ID: {m.name}")
+        except:
+            pass
+
         for model_name in models_to_try:
             try:
-                print(f"DEBUG: Trying model {model_name}")
+                print(f"DEBUG: Attempting {model_name} on v1 API...")
                 response = client.models.generate_content(
                     model=model_name,
                     contents=[prompt, img]
                 )
                 if response:
-                    print(f"DEBUG: Success with {model_name}")
                     break
             except Exception as e:
                 last_error = str(e)
@@ -70,15 +70,13 @@ def predict():
                 continue
 
         if not response:
-            title = "AI Limit Reached" if "429" in last_error else "AI Connection Error"
-            msg = "Google AI is temporarily busy. Please wait 60 seconds and try again." if "429" in last_error else f"Could not connect to AI. Error: {last_error}"
             return jsonify({
-                "disease_name": title,
+                "disease_name": "AI Error",
                 "confidence": "0%",
-                "treatment": msg
+                "treatment": f"Could not find a working AI model. Final Error: {last_error}. Please ensure the Gemini API is enabled in your Google Cloud Project."
             }), 200
 
-        # 3. PARSE RESPONSE
+        # Parse response
         try:
             text = response.text.strip()
             if '```json' in text:
@@ -86,14 +84,14 @@ def predict():
             elif '{' in text:
                 text = text[text.find('{'):text.rfind('}')+1]
             res = json.loads(text)
-        except Exception as e:
+        except:
             res = {
                 "disease_name": "Analysis Success",
                 "confidence": "90%",
                 "treatment": response.text[:500]
             }
 
-        # 4. SAVE TO DATABASE
+        # Save to DB
         try:
             new_report = DiseaseReport(
                 user_email=user_email,
