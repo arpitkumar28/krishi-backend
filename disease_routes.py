@@ -23,7 +23,7 @@ def predict():
         file = request.files['file']
         user_email = request.form.get('email', 'anonymous')
         
-        # 1. OPTIMIZE IMAGE: Resize for speed
+        # 1. OPTIMIZE IMAGE: Resize for speed and reliability
         img = Image.open(file)
         if img.mode != 'RGB':
             img = img.convert('RGB')
@@ -36,17 +36,47 @@ def predict():
                 "treatment": "Please set GEMINI_API_KEY in Render settings."
             }), 200
 
-        # 2. SWITCH TO 1.5 FLASH (Higher Free Quota)
+        # 2. RESILIENT MODEL LOOP
+        # We try multiple models to avoid 404 or 429 (Quota) errors
+        models_to_try = [
+            "gemini-2.0-flash", 
+            "gemini-1.5-flash", 
+            "gemini-2.0-flash-lite", 
+            "gemini-1.5-flash-latest"
+        ]
+        
         prompt = (
             "Analyze this plant leaf. If it has a disease, name it and give treatment. "
             "If healthy, say 'Healthy'. Return ONLY a JSON object: "
             "{\"disease_name\": \"...\", \"confidence\": \"...%\", \"treatment\": \"...\"}"
         )
         
-        response = client.models.generate_content(
-            model="gemini-1.5-flash", # Higher quota than 2.0
-            contents=[prompt, img]
-        )
+        response = None
+        last_error = ""
+        
+        for model_name in models_to_try:
+            try:
+                print(f"DEBUG: Trying model {model_name}")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[prompt, img]
+                )
+                if response:
+                    print(f"DEBUG: Success with {model_name}")
+                    break
+            except Exception as e:
+                last_error = str(e)
+                print(f"DEBUG: {model_name} failed: {last_error}")
+                continue
+
+        if not response:
+            title = "AI Limit Reached" if "429" in last_error else "AI Connection Error"
+            msg = "Google AI is temporarily busy. Please wait 60 seconds and try again." if "429" in last_error else f"Could not connect to AI. Error: {last_error}"
+            return jsonify({
+                "disease_name": title,
+                "confidence": "0%",
+                "treatment": msg
+            }), 200
 
         # 3. PARSE RESPONSE
         try:
@@ -59,8 +89,8 @@ def predict():
         except Exception as e:
             res = {
                 "disease_name": "Analysis Success",
-                "confidence": "95%",
-                "treatment": response.text[:300]
+                "confidence": "90%",
+                "treatment": response.text[:500]
             }
 
         # 4. SAVE TO DATABASE
@@ -79,14 +109,10 @@ def predict():
         return jsonify(res)
 
     except Exception as e:
-        err_msg = str(e)
-        if "429" in err_msg:
-            err_msg = "Google AI is busy (Free limit reached). Please wait 30 seconds and try again."
-            
         return jsonify({
-            "disease_name": "AI Limit Reached",
+            "disease_name": "Server Error",
             "confidence": "0%",
-            "treatment": err_msg
+            "treatment": f"Critical Error: {str(e)}"
         }), 200
 
 @disease_bp.route('/reports/<email>', methods=['GET'])
