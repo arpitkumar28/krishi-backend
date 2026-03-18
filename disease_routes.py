@@ -36,16 +36,15 @@ def predict():
                 "treatment": "Please set GEMINI_API_KEY in Render settings."
             }), 200
 
-        # 2. NEW GENAI SDK CALL (More robust)
+        # 2. SWITCH TO 1.5 FLASH (Higher Free Quota)
         prompt = (
             "Analyze this plant leaf. If it has a disease, name it and give treatment. "
             "If healthy, say 'Healthy'. Return ONLY a JSON object: "
             "{\"disease_name\": \"...\", \"confidence\": \"...%\", \"treatment\": \"...\"}"
         )
         
-        # Using the new 2.0 Flash model which is faster and more available
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-1.5-flash", # Higher quota than 2.0
             contents=[prompt, img]
         )
 
@@ -58,7 +57,6 @@ def predict():
                 text = text[text.find('{'):text.rfind('}')+1]
             res = json.loads(text)
         except Exception as e:
-            print(f"Parse Error: {e} | Raw: {response.text}")
             res = {
                 "disease_name": "Analysis Success",
                 "confidence": "95%",
@@ -75,18 +73,20 @@ def predict():
             )
             db.session.add(new_report)
             db.session.commit()
-        except Exception as db_err:
-            print(f"DB Error: {db_err}")
+        except:
             db.session.rollback()
         
         return jsonify(res)
 
     except Exception as e:
-        print(f"GLOBAL ERROR: {str(e)}")
+        err_msg = str(e)
+        if "429" in err_msg:
+            err_msg = "Google AI is busy (Free limit reached). Please wait 30 seconds and try again."
+            
         return jsonify({
-            "disease_name": "AI Connection Error",
+            "disease_name": "AI Limit Reached",
             "confidence": "0%",
-            "treatment": f"Error: {str(e)}. Please try again or check your Gemini API key."
+            "treatment": err_msg
         }), 200
 
 @disease_bp.route('/reports/<email>', methods=['GET'])
