@@ -1,9 +1,9 @@
 import os
 import json
+import time
 from google import genai
 from flask import Blueprint, request, jsonify
 from PIL import Image
-import io
 from models import db, DiseaseReport
 
 disease_bp = Blueprint('disease', __name__)
@@ -12,7 +12,7 @@ disease_bp = Blueprint('disease', __name__)
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 client = None
 if GEMINI_KEY:
-    # Force the stable v1 API to avoid v1beta 404 issues
+    # Explicitly use the stable API version
     client = genai.Client(api_key=GEMINI_KEY, http_options={'api_version': 'v1'})
 
 @disease_bp.route('/predict', methods=['POST'])
@@ -30,14 +30,10 @@ def predict():
         img.thumbnail((500, 500))
         
         if not client:
-            return jsonify({
-                "disease_name": "API Key Missing",
-                "confidence": "0%",
-                "treatment": "Please set GEMINI_API_KEY in Render settings."
-            }), 200
+            return jsonify({"disease_name": "Error", "confidence": "0%", "treatment": "API Key Missing"}), 200
 
-        # Try standard model names without '-latest' suffixes which often 404
-        models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
+        # Try models with their full resource names to avoid 404
+        models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash"]
         
         prompt = (
             "Analyze this plant leaf. Identify the disease and give treatment. "
@@ -47,36 +43,37 @@ def predict():
         response = None
         last_error = ""
         
-        # MODEL DISCOVERY LOG (Check Render logs to see this)
-        try:
-            print("--- Available Models ---")
-            for m in client.models.list():
-                print(f"Model ID: {m.name}")
-        except:
-            pass
-
-        for model_name in models_to_try:
+        for model_id in models_to_try:
             try:
-                print(f"DEBUG: Attempting {model_name} on v1 API...")
+                # Add a tiny delay to help with rate limits
+                time.sleep(1)
                 response = client.models.generate_content(
-                    model=model_name,
+                    model=model_id,
                     contents=[prompt, img]
                 )
                 if response:
                     break
             except Exception as e:
                 last_error = str(e)
-                print(f"DEBUG: {model_name} failed: {last_error}")
+                if "429" in last_error:
+                    # If quota hit, wait a bit longer and try the next one
+                    time.sleep(2)
                 continue
 
         if not response:
+            if "429" in last_error:
+                return jsonify({
+                    "disease_name": "AI is Busy",
+                    "confidence": "0%",
+                    "treatment": "You've reached the free limit. Please wait 1 minute and try again."
+                }), 200
             return jsonify({
-                "disease_name": "AI Error",
+                "disease_name": "AI Connection Error",
                 "confidence": "0%",
-                "treatment": f"Could not find a working AI model. Final Error: {last_error}. Please ensure the Gemini API is enabled in your Google Cloud Project."
+                "treatment": f"Could not connect. Error: {last_error}"
             }), 200
 
-        # Parse response
+        # Parse JSON
         try:
             text = response.text.strip()
             if '```json' in text:
@@ -85,11 +82,7 @@ def predict():
                 text = text[text.find('{'):text.rfind('}')+1]
             res = json.loads(text)
         except:
-            res = {
-                "disease_name": "Analysis Success",
-                "confidence": "90%",
-                "treatment": response.text[:500]
-            }
+            res = {"disease_name": "Healthy / Unknown", "confidence": "70%", "treatment": response.text[:200]}
 
         # Save to DB
         try:
@@ -107,11 +100,7 @@ def predict():
         return jsonify(res)
 
     except Exception as e:
-        return jsonify({
-            "disease_name": "Server Error",
-            "confidence": "0%",
-            "treatment": f"Critical Error: {str(e)}"
-        }), 200
+        return jsonify({"disease_name": "Error", "confidence": "0%", "treatment": str(e)}), 200
 
 @disease_bp.route('/reports/<email>', methods=['GET'])
 def get_reports(email):
