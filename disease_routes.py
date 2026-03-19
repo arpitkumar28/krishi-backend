@@ -14,14 +14,6 @@ client = None
 if GEMINI_KEY:
     client = genai.Client(api_key=GEMINI_KEY)
 
-def get_stable_model():
-    """
-    Returns the model ID. 
-    If 'gemini-1.5-flash' fails, 'gemini-1.5-pro' is a great alternative.
-    'gemini-2.0-flash-exp' is also available and very fast.
-    """
-    return "gemini-1.5-flash" # Primary model
-
 @disease_bp.route('/predict', methods=['POST'])
 def predict():
     try:
@@ -39,31 +31,31 @@ def predict():
         if not client:
             return jsonify({"disease_name": "Error", "confidence": "0%", "treatment": "API Key Missing"}), 200
 
-        # Try with Flash first, then fallback to Pro if there's a 404
-        model_to_use = "gemini-1.5-flash"
-        
+        # Try Gemini 2.0 Flash (Experimental) first - it's very fast and reliable right now
         try:
-            return run_inference(model_to_use, img, user_email)
+            return run_inference("gemini-2.0-flash-exp", img, user_email)
         except Exception as e:
-            if "404" in str(e) or "not found" in str(e).lower():
-                print(f"Flash model not found, falling back to Pro...")
-                return run_inference("gemini-1.5-pro", img, user_email)
-            raise e
+            print(f"Gemini 2.0 failed: {e}. Trying fallback to 1.5 Flash...")
+            try:
+                return run_inference("gemini-1.5-flash", img, user_email)
+            except Exception as e2:
+                raise e2
 
     except Exception as e:
         err_msg = str(e)
         print(f"ERROR: {err_msg}")
+        
         if "429" in err_msg:
             return jsonify({
                 "disease_name": "AI is Overloaded",
                 "confidence": "0%",
-                "treatment": "The free limit is reached. Please wait 1 minute."
+                "treatment": "Rate limit reached. Please wait a moment."
             }), 200
             
         return jsonify({
             "disease_name": "AI Connection Error",
             "confidence": "0%",
-            "treatment": f"Could not analyze image. Error: {err_msg}"
+            "treatment": f"Analysis failed. Error: {err_msg}"
         }), 200
 
 def run_inference(model_id, img, user_email):
@@ -89,7 +81,6 @@ def run_inference(model_id, img, user_email):
 
     res = json.loads(response.text)
     
-    # Save to Database
     try:
         new_report = DiseaseReport(
             user_email=user_email,
