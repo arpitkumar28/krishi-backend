@@ -15,8 +15,12 @@ if GEMINI_KEY:
     client = genai.Client(api_key=GEMINI_KEY)
 
 def get_stable_model():
-    """Prioritizes 1.5 Flash for higher free quota limits."""
-    return "gemini-1.5-flash"
+    """
+    Returns the model ID. 
+    If 'gemini-1.5-flash' fails, 'gemini-1.5-pro' is a great alternative.
+    'gemini-2.0-flash-exp' is also available and very fast.
+    """
+    return "gemini-1.5-flash" # Primary model
 
 @disease_bp.route('/predict', methods=['POST'])
 def predict():
@@ -30,63 +34,30 @@ def predict():
         img = Image.open(file)
         if img.mode != 'RGB':
             img = img.convert('RGB')
-        img.thumbnail((800, 800)) # Balanced size for quality and speed
+        img.thumbnail((800, 800))
         
         if not client:
             return jsonify({"disease_name": "Error", "confidence": "0%", "treatment": "API Key Missing"}), 200
 
-        model_id = get_stable_model()
+        # Try with Flash first, then fallback to Pro if there's a 404
+        model_to_use = "gemini-1.5-flash"
         
-        # New "JSON Mode" configuration for 100% reliable data
-        response = client.models.generate_content(
-            model=model_id,
-            contents=[
-                "Analyze this plant leaf. If it has a disease, identify it and give a treatment plan. If healthy, say 'Healthy'. Return the result in JSON format.",
-                img
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type='application/json',
-                response_schema={
-                    'type': 'OBJECT',
-                    'properties': {
-                        'disease_name': {'type': 'STRING'},
-                        'confidence': {'type': 'STRING'},
-                        'treatment': {'type': 'STRING'}
-                    },
-                    'required': ['disease_name', 'confidence', 'treatment']
-                }
-            )
-        )
-
-        # Parse JSON reliably
-        res = json.loads(response.text)
-        
-        # Save to Database
         try:
-            new_report = DiseaseReport(
-                user_email=user_email,
-                disease_name=res.get('disease_name', 'Unknown'),
-                confidence=res.get('confidence', '0%'),
-                treatment=res.get('treatment', 'No treatment info available.')
-            )
-            db.session.add(new_report)
-            db.session.commit()
-        except Exception as db_err:
-            print(f"DB Error: {db_err}")
-            db.session.rollback()
-        
-        return jsonify(res)
+            return run_inference(model_to_use, img, user_email)
+        except Exception as e:
+            if "404" in str(e) or "not found" in str(e).lower():
+                print(f"Flash model not found, falling back to Pro...")
+                return run_inference("gemini-1.5-pro", img, user_email)
+            raise e
 
     except Exception as e:
         err_msg = str(e)
         print(f"ERROR: {err_msg}")
-        
-        # Friendly response for rate limits
         if "429" in err_msg:
             return jsonify({
                 "disease_name": "AI is Overloaded",
                 "confidence": "0%",
-                "treatment": "The free Google AI limit is reached. Please wait 1 minute and try again."
+                "treatment": "The free limit is reached. Please wait 1 minute."
             }), 200
             
         return jsonify({
@@ -94,6 +65,45 @@ def predict():
             "confidence": "0%",
             "treatment": f"Could not analyze image. Error: {err_msg}"
         }), 200
+
+def run_inference(model_id, img, user_email):
+    response = client.models.generate_content(
+        model=model_id,
+        contents=[
+            "Analyze this plant leaf. If it has a disease, identify it and give a treatment plan. If healthy, say 'Healthy'. Return the result in JSON format.",
+            img
+        ],
+        config=types.GenerateContentConfig(
+            response_mime_type='application/json',
+            response_schema={
+                'type': 'OBJECT',
+                'properties': {
+                    'disease_name': {'type': 'STRING'},
+                    'confidence': {'type': 'STRING'},
+                    'treatment': {'type': 'STRING'}
+                },
+                'required': ['disease_name', 'confidence', 'treatment']
+            }
+        )
+    )
+
+    res = json.loads(response.text)
+    
+    # Save to Database
+    try:
+        new_report = DiseaseReport(
+            user_email=user_email,
+            disease_name=res.get('disease_name', 'Unknown'),
+            confidence=res.get('confidence', '0%'),
+            treatment=res.get('treatment', 'No treatment info available.')
+        )
+        db.session.add(new_report)
+        db.session.commit()
+    except Exception as db_err:
+        print(f"DB Error: {db_err}")
+        db.session.rollback()
+    
+    return jsonify(res)
 
 @disease_bp.route('/reports/<email>', methods=['GET'])
 def get_reports(email):
